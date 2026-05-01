@@ -13,9 +13,17 @@ return new class extends Migration
     {
         Schema::create('settings', function (Blueprint $table) {
             $table->id();
+           // 🔷 Tax Settings
             $table->decimal('tax_rate', 5, 2)->default(10);
+            $table->date('tax_effective_date')->nullable();
 
+        // 🔷 Duty Slabs (JSON)
             $table->json('duty_slabs')->nullable();
+
+        // 🔷 System Flags
+            $table->boolean('auto_tax_enabled')->default(true);
+            $table->boolean('auto_duty_enabled')->default(true);
+
     /*
     Example JSON:
     [

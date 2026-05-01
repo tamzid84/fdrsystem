@@ -10,7 +10,7 @@ use Illuminate\Support\Facades\DB;
 class FdrService
 {
     /**
-     * Calculate Interest
+     * 🔥 Interest Calculation
      */
     public static function calculateInterest(float $amount, float $rate, int $tenure): float
     {
@@ -18,52 +18,54 @@ class FdrService
     }
 
     /**
-     * Calculate Tax
+     * 🔥 Tax (Dynamic from Fund)
      */
-    public static function calculateTax(float $interest, float $taxRate = 10): float
+    public static function calculateTax(Fdr $fdr, float $interest): float
     {
-        return round(($interest * $taxRate) / 100, 2);
+        $rate = $fdr->fund->tax_rate ?? 10;
+        return round(($interest * $rate) / 100, 2);
     }
 
     /**
-     * Net Interest
+     * 🔥 Net Calculation
      */
-    public static function netInterest(float $interest, float $tax): float
+    public static function calculateNet(float $principal, float $interest, float $tax, float $charge): float
     {
-        return round($interest - $tax, 2);
+        return round($principal + $interest - $tax - $charge, 2);
     }
 
     /**
-     * Maturity Date
+     * 🔥 Maturity Date
      */
     public static function maturityDate($startDate, int $tenure): string
     {
-        return Carbon::parse($startDate)
-            ->addMonths($tenure)
-            ->toDateString();
+        return Carbon::parse($startDate)->addMonths($tenure)->toDateString();
     }
 
     /**
-     * CREATE FDR
+     * ==========================================
+     * 🔥 CREATE FDR
+     * ==========================================
      */
     public static function create(array $data): Fdr
     {
         return DB::transaction(function () use ($data) {
+
+            $data['charge'] = $data['charge'] ?? 0;
 
             $data['maturity_date'] = self::maturityDate(
                 $data['start_date'],
                 $data['tenure']
             );
 
+            $data['version'] = 1;
+
             $fdr = Fdr::create($data);
 
-            // Fund update
+            // Fund deduction
             $fdr->fund->adjustBalance($fdr->amount, 'subtract');
 
-            // Bank update
-            $fdr->bank->adjustInvestment($fdr->amount, 'add');
-
-            // 🧾 Transaction log
+            // Transaction log
             Transaction::create([
                 'fdr_id' => $fdr->id,
                 'type' => 'create',
@@ -81,11 +83,13 @@ class FdrService
     }
 
     /**
-     * RENEW FDR
+     * ==========================================
+     * 🔥 RENEW (Principal / Principal+Interest)
+     * ==========================================
      */
-    public static function renew(Fdr $fdr, float $taxRate = 10): Fdr
+    public static function renew(Fdr $fdr): Fdr
     {
-        return DB::transaction(function () use ($fdr, $taxRate) {
+        return DB::transaction(function () use ($fdr) {
 
             $interest = self::calculateInterest(
                 $fdr->amount,
@@ -93,53 +97,78 @@ class FdrService
                 $fdr->tenure
             );
 
-            $tax = self::calculateTax($interest, $taxRate);
-            $netInterest = self::netInterest($interest, $tax);
+            $tax = self::calculateTax($fdr, $interest);
+            $charge = $fdr->charge ?? 0;
 
-            $newAmount = $fdr->amount + $netInterest;
+            $net = self::calculateNet($fdr->amount, $interest, $tax, $charge);
 
-            // Old FDR status
+            // determine new principal
+            $newAmount = ($fdr->renewal_type === 'principal')
+                ? $fdr->amount
+                : $fdr->amount;
+
+            // profit handling
+            $profit = $net - $fdr->amount;
+            if ($profit > 0) {
+                $fdr->fund->adjustBalance($profit, 'add');
+            }
+
             $fdr->update(['status' => 'renewed']);
 
-            // Fund update (interest added)
-            $fdr->fund->adjustBalance($netInterest, 'add');
-
-            // Bank stays same investment (re-invested)
-
-            // 🧾 Transaction log
+            // transaction for old FDR close
             Transaction::create([
                 'fdr_id' => $fdr->id,
                 'type' => 'renew',
                 'principal' => $fdr->amount,
                 'interest' => $interest,
                 'tax' => $tax,
-                'duty' => 0,
-                'net_amount' => $newAmount,
+                'duty' => $charge,
+                'net_amount' => $net,
                 'transaction_date' => now(),
                 'remarks' => 'FDR Renewed',
             ]);
 
-            // Create new FDR
-            return Fdr::create([
-                'fdr_number' => 'FDR-' . time(),
+            // NEW FDR (same FDR number)
+            $newFdr = Fdr::create([
+                'fdr_number' => $fdr->fdr_number, // ✅ SAME NUMBER
                 'fund_id' => $fdr->fund_id,
                 'bank_id' => $fdr->bank_id,
                 'amount' => $newAmount,
                 'interest_rate' => $fdr->interest_rate,
                 'start_date' => now(),
                 'tenure' => $fdr->tenure,
+                'charge' => $charge,
+                'renewal_type' => $fdr->renewal_type,
+                'version' => $fdr->version + 1,
                 'maturity_date' => self::maturityDate(now(), $fdr->tenure),
                 'status' => 'active',
             ]);
+
+            // 🔥 transaction for NEW FDR
+            Transaction::create([
+                'fdr_id' => $newFdr->id,
+                'type' => 'create',
+                'principal' => $newFdr->amount,
+                'interest' => 0,
+                'tax' => 0,
+                'duty' => $charge,
+                'net_amount' => $newFdr->amount,
+                'transaction_date' => now(),
+                'remarks' => 'FDR Created after Renewal',
+            ]);
+
+            return $newFdr;
         });
     }
 
     /**
-     * ENCASH FDR
+     * ==========================================
+     * 🔥 RENEW WITH NET (COMPOUND)
+     * ==========================================
      */
-    public static function encash(Fdr $fdr, float $taxRate = 10): array
+    public static function renewWithNetAmount(Fdr $fdr): Fdr
     {
-        return DB::transaction(function () use ($fdr, $taxRate) {
+        return DB::transaction(function () use ($fdr) {
 
             $interest = self::calculateInterest(
                 $fdr->amount,
@@ -147,29 +176,90 @@ class FdrService
                 $fdr->tenure
             );
 
-            $tax = self::calculateTax($interest, $taxRate);
-            $netInterest = self::netInterest($interest, $tax);
+            $tax = self::calculateTax($fdr, $interest);
+            $charge = $fdr->charge ?? 0;
 
-            $totalReturn = $fdr->amount + $netInterest;
+            $net = self::calculateNet($fdr->amount, $interest, $tax, $charge);
+
+            $fdr->update(['status' => 'renewed']);
+
+            Transaction::create([
+                'fdr_id' => $fdr->id,
+                'type' => 'renew',
+                'principal' => $fdr->amount,
+                'interest' => $interest,
+                'tax' => $tax,
+                'duty' => $charge,
+                'net_amount' => $net,
+                'transaction_date' => now(),
+                'remarks' => 'Renewed with Net Amount',
+            ]);
+
+            $newFdr = Fdr::create([
+                'fdr_number' => $fdr->fdr_number, // ✅ SAME NUMBER
+                'fund_id' => $fdr->fund_id,
+                'bank_id' => $fdr->bank_id,
+                'amount' => $net,
+                'interest_rate' => $fdr->interest_rate,
+                'start_date' => now(),
+                'tenure' => $fdr->tenure,
+                'charge' => $charge,
+                'renewal_type' => 'principal_interest',
+                'version' => $fdr->version + 1,
+                'maturity_date' => self::maturityDate(now(), $fdr->tenure),
+                'status' => 'active',
+            ]);
+
+            // 🔥 transaction for NEW FDR
+            Transaction::create([
+                'fdr_id' => $newFdr->id,
+                'type' => 'create',
+                'principal' => $newFdr->amount,
+                'interest' => 0,
+                'tax' => 0,
+                'duty' => $charge,
+                'net_amount' => $newFdr->amount,
+                'transaction_date' => now(),
+                'remarks' => 'FDR Created (Compound Renewal)',
+            ]);
+
+            return $newFdr;
+        });
+    }
+
+    /**
+     * ==========================================
+     * 🔥 ENCASH FDR
+     * ==========================================
+     */
+    public static function encash(Fdr $fdr): array
+    {
+        return DB::transaction(function () use ($fdr) {
+
+            $interest = self::calculateInterest(
+                $fdr->amount,
+                $fdr->interest_rate,
+                $fdr->tenure
+            );
+
+            $tax = self::calculateTax($fdr, $interest);
+            $charge = $fdr->charge ?? 0;
+
+            $net = self::calculateNet($fdr->amount, $interest, $tax, $charge);
 
             // Fund return
-            $fdr->fund->adjustBalance($totalReturn, 'add');
+            $fdr->fund->adjustBalance($net, 'add');
 
-            // Bank investment reduce
-            $fdr->bank->adjustInvestment($fdr->amount, 'subtract');
-
-            // Status update
             $fdr->update(['status' => 'encashed']);
 
-            // 🧾 Transaction log
             Transaction::create([
                 'fdr_id' => $fdr->id,
                 'type' => 'encash',
                 'principal' => $fdr->amount,
                 'interest' => $interest,
                 'tax' => $tax,
-                'duty' => 0,
-                'net_amount' => $totalReturn,
+                'duty' => $charge,
+                'net_amount' => $net,
                 'transaction_date' => now(),
                 'remarks' => 'FDR Encashed',
             ]);
@@ -178,8 +268,8 @@ class FdrService
                 'principal' => $fdr->amount,
                 'interest' => $interest,
                 'tax' => $tax,
-                'net_interest' => $netInterest,
-                'total_return' => $totalReturn,
+                'charge' => $charge,
+                'net_amount' => $net,
             ];
         });
     }

@@ -61,6 +61,11 @@ class FundResource extends Resource
                 ->numeric()
                 ->disabled()
                 ->dehydrated(),
+            TextInput::make('tax_rate')
+                 ->label('Tax Rate (%)')
+                 ->numeric()
+                ->default(10)
+                ->required(),
         ]);
 }
 

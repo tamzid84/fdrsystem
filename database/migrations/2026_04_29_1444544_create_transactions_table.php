@@ -32,6 +32,7 @@ return new class extends Migration
     $table->decimal('interest', 18, 2)->default(0);
     $table->decimal('tax', 18, 2)->default(0);
     $table->decimal('duty', 18, 2)->default(0);
+    $table->decimal('charge', 18, 2)->default(0);
 
     $table->decimal('net_amount', 18, 2)->default(0);
 

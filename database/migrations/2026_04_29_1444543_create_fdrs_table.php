@@ -13,7 +13,7 @@ return new class extends Migration
     {
         Schema::create('fdrs', function (Blueprint $table) {
             $table->id();
-            $table->string('fdr_number')->unique();
+            $table->string('fdr_number');
             $table->string('fdr_account_number')->nullable();
 
             $table->foreignId('fund_id')->constrained()->cascadeOnDelete();
@@ -23,12 +23,17 @@ return new class extends Migration
 
             $table->decimal('amount', 18, 2);
             $table->decimal('interest_rate', 5, 2);
+            $table->decimal('charge', 18, 2)->default(0);
 
             $table->date('start_date');
             $table->date('maturity_date');
             $table->integer('tenure'); // months বা days
 
-            $table->enum('renewal_type', ['principal', 'principal_interest'])->default('principal');
+           $table->enum('renewal_type', [
+                        'principal',
+                        'principal_interest',
+                        'net' // ✅ NEW
+                        ])->default('principal');
 
             $table->enum('status', ['active', 'renewed', 'encashed'])->default('active');
             $table->timestamps();

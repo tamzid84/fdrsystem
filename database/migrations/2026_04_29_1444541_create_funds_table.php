@@ -18,6 +18,7 @@ return new class extends Migration
             $table->decimal('opening_balance', 18, 2)->default(0);
             $table->decimal('current_balance', 18, 2)->default(0);
             $table->decimal('available_balance', 18, 2)->default(0);
+            $table->decimal('tax_rate', 5, 2)->default(10);
             $table->timestamps();
         });
     }

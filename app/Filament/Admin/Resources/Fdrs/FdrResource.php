@@ -38,12 +38,51 @@ class FdrResource extends Resource
             Select::make('fund_id')
                 ->relationship('fund', 'name')
                 ->required(),
+            TextInput::make('fdr_account_number')
+            ->label('FDR Account Number')
+            ->required(),
+           
+      Select::make('bank_id')
+    ->label('Bank')
+    ->searchable()
+    ->preload()
 
-            Select::make('bank_id')
-                ->relationship('bank', 'name')
-                ->required(),
+    ->getSearchResultsUsing(function (string $search) {
+        return \App\Models\Bank::query()
+            ->where('name', 'like', "%{$search}%")
+            ->orWhere('branch_name', 'like', "%{$search}%")
+            ->limit(50)
+            ->get()
+            ->mapWithKeys(fn ($bank) => [
+                $bank->id => $bank->name . ' - ' . $bank->branch_name
+            ])
+            ->toArray();
+    })
+
+    ->getOptionLabelUsing(function ($value) {
+        $bank = \App\Models\Bank::find($value);
+
+        return $bank
+            ? $bank->name . ' - ' . $bank->branch_name
+            : null;
+    })
+
+    ->live()
+    ->afterStateUpdated(function ($state, callable $set) {
+
+        $bank = \App\Models\Bank::find($state);
+
+        $set('branch_name', $bank?->branch_name);
+    }),
+    TextInput::make('branch_name')
+    ->label('Branch Name')
+    ->readOnly()
+    ->dehydrated(true),// IMPORTANT (so it stores if needed)
 
             TextInput::make('amount')
+                ->numeric()
+                ->required(),
+            TextInput::make('charge')
                 ->numeric()
                 ->required(),
 
@@ -153,6 +192,16 @@ class FdrResource extends Resource
                 ->icon('heroicon-o-arrow-path')
                 ->visible(fn ($record) => $record->status === 'active')
                 ->action(fn ($record) => \App\Services\FdrService::renew($record)),
+
+            Action::make('renewNet')
+                ->label('Renew (Net)')
+                ->icon('heroicon-o-arrow-path')
+                ->color('success')
+                ->requiresConfirmation()
+                ->visible(fn ($record) => $record->status === 'active')
+                ->action(fn ($record) => \App\Services\FdrService::renewWithNetAmount($record)),
+                
+    
 
             Action::make('encash')
                 ->label('Encash')
