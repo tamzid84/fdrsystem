@@ -38,6 +38,8 @@ class AdminPanelProvider extends PanelProvider
             ->widgets([
                 AccountWidget::class,
                 FilamentInfoWidget::class,
+                \App\Filament\Widgets\QuickInfoPanel::class,
+                \App\Filament\Widgets\RecentTransactions::class,
             ])
             ->middleware([
                 EncryptCookies::class,
